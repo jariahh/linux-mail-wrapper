@@ -71,6 +71,12 @@ const SEC_CH_UA =
 const SEC_CH_UA_FULL =
   `"Chromium";v="${CHROME_FULL}", "Google Chrome";v="${CHROME_FULL}", "Not?A_Brand";v="99.0.0.0"`;
 
+// The header rewrite (configureSession) fixes what Google sees over HTTP. The
+// in-page JS tells (navigator.userAgentData advertising only "Chromium", and an
+// empty window.chrome) are patched in the page's main world by
+// src/google-preload.js, loaded only on Google account views.
+const GOOGLE_PRELOAD = path.join(__dirname, 'google-preload.js');
+
 // Hosts that must open *inside* the app (auth / SSO popups). Anything else that
 // tries to open a new window is treated as an external link and handed to the
 // user's default browser.
@@ -417,6 +423,7 @@ function createAccountView(account) {
   const ses = session.fromPartition(partition);
 
   const url = account.url || DEFAULT_URL;
+  const isGoogle = isGoogleUrl(url);
   configureSession(ses, url);
 
   // Pin the right UA on the *session* too, so sub-resources and auth popups
@@ -426,9 +433,13 @@ function createAccountView(account) {
   const view = new WebContentsView({
     webPreferences: {
       partition,
-      contextIsolation: true,
+      // Google views run a main-world preload (contextIsolation off) so it can
+      // patch navigator.userAgentData / window.chrome before Google's scripts.
+      // nodeIntegration stays false, so the page still gets no Node access.
+      contextIsolation: !isGoogle,
       nodeIntegration: false,
       spellcheck: true,
+      ...(isGoogle ? { preload: GOOGLE_PRELOAD } : {}),
     },
   });
 
@@ -444,7 +455,11 @@ function createAccountView(account) {
         action: 'allow',
         overrideBrowserWindowOptions: {
           autoHideMenuBar: true,
-          webPreferences: { partition, contextIsolation: true },
+          webPreferences: {
+            partition,
+            contextIsolation: !isGoogle,
+            ...(isGoogle ? { preload: GOOGLE_PRELOAD } : {}),
+          },
         },
       };
     }
@@ -453,6 +468,8 @@ function createAccountView(account) {
   });
 
   // Make sure any in-app auth popup also wears the correct UA (Google again).
+  // The Google client-hint preload is applied via overrideBrowserWindowOptions
+  // in the window-open handler above.
   wc.on('did-create-window', (child) => {
     try { child.webContents.setUserAgent(uaForUrl(url)); } catch (_) { /* noop */ }
   });
