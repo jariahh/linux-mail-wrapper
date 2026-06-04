@@ -118,10 +118,12 @@ Sign into each account once — sessions persist between launches.
 
 `npm run dev` launches Electron against a throwaway `.devdata/` profile (so it
 never touches the installed app's logins) and opens Chromium's
-**remote-debugging port on 9347** — a fixed, uncommon port unique to this
-project, so it won't clash with other Electron apps you might be debugging at the
-same time. (Electron has no HTTP dev server; this debug port is the only
-"port" in play. Inspect at `http://localhost:9347` in Chrome.)
+**remote-debugging port on an OS-assigned free port** (`--remote-debugging-port=0`).
+Using `0` means each run grabs an open port, so it can never clash with another
+Electron app — or a leftover instance of this one. Electron has no HTTP dev
+server; this debug port is the only "port" in play, and the **packaged/released
+app opens no port at all**. To inspect, read the chosen port (and DevTools URL)
+from `.devdata/DevToolsActivePort` after launch.
 
 ## Install
 

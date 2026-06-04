@@ -10,7 +10,7 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --remote-debugging-port=9347 --user-data-dir=.devdata",
+    "dev": "electron . --remote-debugging-port=0 --user-data-dir=.devdata",
     "make-icon": "node scripts/make-icon.js",
     "dist": "electron-builder",
     "dist:dir": "electron-builder --dir"
