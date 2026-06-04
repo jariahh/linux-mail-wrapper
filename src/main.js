@@ -40,19 +40,36 @@ const COLORS = [
   '#8A2BE2', '#D83B01', '#107C10', '#5C2D91',
 ];
 
+// Pin UA + client hints to the *real* bundled Chromium version. Inflating the
+// version (e.g. claiming Chrome 148 while the engine is 130) makes the UA string
+// disagree with the Sec-CH-UA client hints and navigator.userAgentData — and
+// that mismatch is exactly what trips Google's "this browser may not be secure"
+// gate. Deriving from process.versions.chrome keeps everything consistent and
+// survives Electron upgrades.
+const CHROME_FULL = process.versions.chrome;            // e.g. "130.0.6723.118"
+const CHROME_MAJOR = CHROME_FULL.split('.')[0];         // e.g. "130"
+
 // A modern Edge user-agent so Outlook web serves the full desktop experience.
 // The default Electron UA gets feature-gated / nagged ("unsupported browser")
 // by Microsoft — pretending to be Edge avoids that.
 const EDGE_UA =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ' +
-  'Chrome/148.0.0.0 Safari/537.36 Edg/148.0.0.0';
+  `Chrome/${CHROME_MAJOR}.0.0.0 Safari/537.36 Edg/${CHROME_MAJOR}.0.0.0`;
 
-// Google blocks OAuth sign-in in embedded / non-standard user-agents
-// ("this browser or app may not be secure"). A plain, current Chrome desktop
-// UA — no "Electron" token — gets Gmail to accept the login.
+// Google blocks OAuth sign-in in embedded / non-standard browsers ("this
+// browser or app may not be secure"). A plain Chrome desktop UA — no "Electron"
+// token, version matching the real engine — plus matching client-hint headers
+// (see configureSession) gets Gmail to accept the login.
 const CHROME_UA =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ' +
-  'Chrome/148.0.0.0 Safari/537.36';
+  `Chrome/${CHROME_MAJOR}.0.0.0 Safari/537.36`;
+
+// Sec-CH-UA client hints presenting as real Google Chrome (Electron otherwise
+// advertises only a "Chromium" brand, which gives the embedded engine away).
+const SEC_CH_UA =
+  `"Chromium";v="${CHROME_MAJOR}", "Google Chrome";v="${CHROME_MAJOR}", "Not?A_Brand";v="99"`;
+const SEC_CH_UA_FULL =
+  `"Chromium";v="${CHROME_FULL}", "Google Chrome";v="${CHROME_FULL}", "Not?A_Brand";v="99.0.0.0"`;
 
 // Hosts that must open *inside* the app (auth / SSO popups). Anything else that
 // tries to open a new window is treated as an external link and handed to the
@@ -231,7 +248,7 @@ const ALLOWED_PERMISSIONS = new Set([
 
 const configuredSessions = new Set();
 
-function configureSession(ses) {
+function configureSession(ses, url) {
   if (configuredSessions.has(ses)) return;
   configuredSessions.add(ses);
 
@@ -239,6 +256,26 @@ function configureSession(ses) {
     callback(ALLOWED_PERMISSIONS.has(permission));
   });
   ses.setPermissionCheckHandler((_wc, permission) => ALLOWED_PERMISSIONS.has(permission));
+
+  // For Google accounts, rewrite the UA + Sec-CH-UA client hints on every
+  // request so the headers present as real Google Chrome. Without this the
+  // client hints still advertise "Chromium" (and the engine's real version),
+  // contradicting the spoofed UA string and triggering the "this browser may
+  // not be secure" sign-in block.
+  if (isGoogleUrl(url)) {
+    ses.webRequest.onBeforeSendHeaders((details, callback) => {
+      const headers = details.requestHeaders;
+      for (const key of Object.keys(headers)) {
+        if (/^(user-agent|sec-ch-ua)/i.test(key)) delete headers[key];
+      }
+      headers['User-Agent'] = CHROME_UA;
+      headers['sec-ch-ua'] = SEC_CH_UA;
+      headers['sec-ch-ua-full-version-list'] = SEC_CH_UA_FULL;
+      headers['sec-ch-ua-mobile'] = '?0';
+      headers['sec-ch-ua-platform'] = '"Linux"';
+      callback({ requestHeaders: headers });
+    });
+  }
 }
 
 // Send a message to both pieces of app chrome (top bar + sidebar) that are
@@ -378,9 +415,9 @@ async function detectIdentity(entry) {
 function createAccountView(account) {
   const partition = `persist:${account.id}`;
   const ses = session.fromPartition(partition);
-  configureSession(ses);
 
   const url = account.url || DEFAULT_URL;
+  configureSession(ses, url);
 
   // Pin the right UA on the *session* too, so sub-resources and auth popups
   // (which inherit the partition) present consistently — important for Google.
