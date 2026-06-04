@@ -11,7 +11,6 @@ const {
   Tray,
   Notification,
   nativeImage,
-  dialog,
   ipcMain,
   shell,
   session,
@@ -800,18 +799,72 @@ function removeAccount(id) {
   refreshBadges();
 }
 
+// ---------------------------------------------------------------------------
+// Custom confirm modal — a small frameless child window styled like the app.
+// Replaces dialog.showMessageBoxSync: the native message box mis-routes mouse
+// input over our frameless BaseWindow + WebContentsView stack on Linux (only
+// keyboard worked), and looks out of place.
+// ---------------------------------------------------------------------------
+let confirmDialog = null;
+let confirmAccept = null;   // callback run if the user confirms
+
+function openConfirmDialog(opts, onAccept) {
+  if (confirmDialog && !confirmDialog.isDestroyed()) confirmDialog.close();
+  confirmAccept = onAccept;
+
+  // Center over the app window (Linux doesn't auto-center modal children).
+  const W = 440, H = 215;
+  const pb = win.getBounds();
+  const x = Math.round(pb.x + (pb.width - W) / 2);
+  const y = Math.round(pb.y + (pb.height - H) / 2);
+
+  confirmDialog = new BrowserWindow({
+    parent: win,
+    modal: true,
+    x,
+    y,
+    width: W,
+    height: H,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    frame: false,
+    autoHideMenuBar: true,
+    backgroundColor: '#1f1f23',
+    webPreferences: {
+      preload: path.join(__dirname, 'confirm', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  confirmDialog.on('closed', () => { confirmDialog = null; confirmAccept = null; });
+  confirmDialog.loadFile(path.join(__dirname, 'confirm', 'index.html'));
+  confirmDialog.webContents.on('did-finish-load', () => {
+    if (confirmDialog && !confirmDialog.isDestroyed()) {
+      confirmDialog.webContents.send('confirm:data', opts);
+    }
+  });
+}
+
+ipcMain.on('confirm:accept', () => {
+  const cb = confirmAccept;
+  if (confirmDialog && !confirmDialog.isDestroyed()) confirmDialog.close();
+  if (cb) cb();
+});
+ipcMain.on('confirm:cancel', () => {
+  if (confirmDialog && !confirmDialog.isDestroyed()) confirmDialog.close();
+});
+
 function confirmRemoveAccount(id) {
   const a = accounts.find((x) => x.id === id);
   if (!a) return;
-  const choice = dialog.showMessageBoxSync(win, {
-    type: 'question',
-    buttons: ['Cancel', 'Remove'],
-    defaultId: 0,
-    cancelId: 0,
+  openConfirmDialog({
+    title: 'Remove account',
     message: `Remove "${a.displayName || a.name}" from the switcher?`,
-    detail: 'The saved login session stays on disk.',
-  });
-  if (choice === 1) removeAccount(id);
+    detail: 'The saved login session stays on disk — sign back in to restore it.',
+    confirmLabel: 'Remove',
+    danger: true,
+  }, () => removeAccount(id));
 }
 
 // Single-instance lock: relaunching focuses the existing window.
