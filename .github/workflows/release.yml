@@ -1,0 +1,32 @@
+name: Release
+
+# Tag a version (e.g. `v0.1.0`) to build and publish a GitHub Release.
+# The AppImage carries the update feed (latest-linux.yml) that installed
+# copies poll, so this is also what drives auto-update.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # create the release + upload assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run make-icon
+
+      - name: Build & publish (AppImage + deb)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx --no-install electron-builder --linux AppImage deb --publish always

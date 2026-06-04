@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; img-src data:;" />
+  <title>Accounts</title>
+  <style>
+    :root { --rail: 64px; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #1b1b1f;
+      overflow: hidden;
+      color: #e8e8ee;
+      font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+      user-select: none; -webkit-user-select: none;
+    }
+    /* Standalone content column — not a window-drag handle (the title bar is). */
+    body {
+      display: flex; flex-direction: column; align-items: center;
+      width: var(--rail); height: 100%;
+      border-right: 1px solid #2a2c33;
+    }
+    button { -webkit-app-region: no-drag; }
+
+    /* The scrollable column of account avatars. */
+    #accts {
+      flex: 1 1 auto; width: 100%;
+      display: flex; flex-direction: column; align-items: center; gap: 10px;
+      padding: 12px 0 4px; overflow-y: auto; overflow-x: hidden;
+    }
+    #accts::-webkit-scrollbar { width: 0; }
+
+    .account {
+      position: relative; flex: none;
+      width: 44px; height: 44px; border-radius: 50%;
+      border: none; padding: 0; cursor: pointer;
+      background: var(--c, #0078D4);
+      color: #fff; font-size: 14px; font-weight: 600; letter-spacing: .3px;
+      display: flex; align-items: center; justify-content: center;
+      transition: border-radius .15s ease, box-shadow .12s ease;
+    }
+    .account:hover { border-radius: 16px; }
+    /* Active account gets a bright pill indicator on the left edge. */
+    .account.active::before {
+      content: ""; position: absolute; left: -10px; top: 50%;
+      transform: translateY(-50%);
+      width: 4px; height: 26px; border-radius: 2px; background: #8b8fff;
+    }
+    .account.active { box-shadow: 0 0 0 2px #8b8fff55; border-radius: 16px; }
+    .account .ini { pointer-events: none; }
+
+    .badge {
+      position: absolute; top: -3px; right: -3px;
+      min-width: 18px; height: 18px; padding: 0 4px;
+      border-radius: 9px; background: #c4314b; border: 2px solid #1b1b1f;
+      color: #fff; font-size: 10px; font-weight: 700;
+      display: none; align-items: center; justify-content: center;
+      pointer-events: none;
+    }
+
+    /* Bottom area: add account. */
+    #bottom {
+      width: 100%;
+      display: flex; flex-direction: column; align-items: center; gap: 8px;
+      padding: 8px 0 12px;
+    }
+    .add {
+      width: 44px; height: 44px; border-radius: 50%;
+      border: 1.5px dashed #4a4a55; color: #b8b8c0; background: transparent;
+      cursor: pointer; font-size: 24px; line-height: 1;
+      display: flex; align-items: center; justify-content: center;
+      transition: border-radius .15s ease, background .12s ease, color .12s ease, border-color .12s ease;
+    }
+    .add:hover { border-radius: 16px; background: #2c2c33; color: #fff; border-color: #8b8fff; }
+
+    /* Empty-state hint shown when there are no accounts yet. */
+    #empty {
+      flex: 1 1 auto; width: 100%;
+      display: none; flex-direction: column; align-items: center; justify-content: center;
+      text-align: center; color: #8a8a96; font-size: 10px; line-height: 1.3;
+      padding: 0 6px;
+    }
+    #empty.show { display: flex; }
+  </style>
+</head>
+<body>
+  <div id="accts"></div>
+  <div id="empty">＋<br />Add your<br />first account</div>
+
+  <div id="bottom">
+    <button class="add" id="add" title="Add account">＋</button>
+  </div>
+
+  <script src="sidebar.js"></script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+name: CI
+
+# Sanity build on every push / PR: install, generate the icon, and run a full
+# (unpacked) electron-builder pass so packaging breakage is caught before a tag
+# release. Does not publish anything.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run make-icon
+
+      - name: Build (unpacked, no publish)
+        run: npx --no-install electron-builder --linux --dir --publish never

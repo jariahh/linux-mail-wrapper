@@ -1,0 +1,8 @@
+{
+  "_comment": "Optional pre-seed. Leave \"accounts\" empty to start with the in-app \"Add your first account\" flow. Each account gets a fully isolated login session (its own cookies/storage) keyed by `id`. `service` is one of m365|outlook|gmail|custom (informational); `url` is what loads. `color` drives the rail avatar. A user-editable copy is written to the app's userData dir on first run, and that copy wins thereafter. Examples (commented form below):",
+  "_examples": [
+    { "id": "work", "name": "Work", "color": "#0078D4", "service": "m365", "url": "https://outlook.office.com/mail/" },
+    { "id": "personal", "name": "Personal", "color": "#C4314B", "service": "gmail", "url": "https://mail.google.com/" }
+  ],
+  "accounts": []
+}

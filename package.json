@@ -1,0 +1,51 @@
+{
+  "name": "linux-mail-wrapper",
+  "version": "0.1.0",
+  "description": "Multi-account email wrapper for Linux (Outlook web + Gmail) with a native-style account rail",
+  "main": "src/main.js",
+  "author": {
+    "name": "Jariah",
+    "email": "jariahh@users.noreply.github.com"
+  },
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --remote-debugging-port=9347 --user-data-dir=.devdata",
+    "make-icon": "node scripts/make-icon.js",
+    "dist": "electron-builder",
+    "dist:dir": "electron-builder --dir"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "io.github.jariah.linux-mail-wrapper",
+    "productName": "Mail (Linux)",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "jariahh",
+        "repo": "linux-mail-wrapper",
+        "releaseType": "release"
+      }
+    ],
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "accounts.json"
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Network",
+      "icon": "assets/icon.png",
+      "synopsis": "Multi-account email (Outlook web + Gmail) for Linux"
+    }
+  }
+}
