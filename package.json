@@ -1,6 +1,6 @@
 {
   "name": "linux-mail-wrapper",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Multi-account email wrapper for Linux (Outlook web + Gmail) with a native-style account rail",
   "main": "src/main.js",
   "author": {
