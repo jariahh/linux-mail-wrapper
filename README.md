@@ -64,8 +64,14 @@ automatically per account based on its URL.
 - **System tray** — closing the window hides it to the tray (it keeps running for
   notifications); quit from the tray menu. The tray also toggles **Start on login**
   and **Start hidden in tray**.
-- **New-mail notifications** — the Notification permission is granted for the mail
-  sites, so Outlook web and Gmail fire native desktop notifications.
+- **New-mail notifications** — the app watches every account's unread count
+  (even the hidden ones — background throttling is off so they keep polling) and
+  fires a native desktop notification when it rises. **Clicking the notification
+  brings the window forward and switches to that account.** The wrapper raises
+  these itself rather than letting each web app fire its own, so you get exactly
+  one notification per delivery with consistent click behaviour. It stays quiet
+  for the account you're actively looking at (the window is focused and that
+  account is on top).
 - **Auth-aware link handling** — Microsoft/Google SSO popups stay in-app; real
   external links open in your default browser.
 - **Unread badges** per account + an app badge count (parsed from the page title).

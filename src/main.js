@@ -9,6 +9,7 @@ const {
   WebContentsView,
   Menu,
   Tray,
+  Notification,
   nativeImage,
   dialog,
   ipcMain,
@@ -241,10 +242,11 @@ let accounts = [];         // persisted source of truth (see loadAccounts)
 // ---------------------------------------------------------------------------
 // Per-account session configuration
 // ---------------------------------------------------------------------------
-// Notifications are the headline reason for a desktop wrapper, so mail sites
-// get them granted. We also allow the small set of conveniences webmail uses.
+// The wrapper fires new-mail notifications itself (see maybeNotifyNewMail), so
+// the web 'notifications' permission is intentionally NOT granted — otherwise
+// Outlook/Gmail would also raise their own, producing duplicates with worse
+// click handling. We still allow the small set of conveniences webmail uses.
 const ALLOWED_PERMISSIONS = new Set([
-  'notifications',
   'fullscreen',
   'clipboard-read',
   'clipboard-sanitized-write',
@@ -358,6 +360,43 @@ function refreshBadges() {
 }
 
 // ---------------------------------------------------------------------------
+// New-mail notifications
+// We derive "new mail" from the unread count rising (parsed from the title).
+// Fire only when the user isn't already looking at that account — i.e. it's a
+// background account, or the window is hidden/unfocused. This keeps the active
+// account's own folder navigation (which also moves the title count) quiet.
+// ---------------------------------------------------------------------------
+function userIsWatching(id) {
+  return id === activeId && win && win.isVisible() && win.isFocused();
+}
+
+function maybeNotifyNewMail(entry, prev, next) {
+  // Skip the first title we ever see (initial load establishes the baseline),
+  // anything that isn't an increase, and the account the user is watching.
+  if (!entry.sawTitle || next <= prev || userIsWatching(entry.account.id)) return;
+  // Debounce: providers often flicker the title a few times per delivery.
+  const now = Date.now();
+  if (entry.lastNotify && now - entry.lastNotify < 5000) return;
+  entry.lastNotify = now;
+
+  if (!Notification.isSupported()) return;
+  const acc = entry.account;
+  const name = acc.displayName || acc.name;
+  const note = new Notification({
+    title: name,
+    body: next === 1 ? 'New message' : `${next} unread messages`,
+    icon: ICON_PATH,
+    silent: false,
+  });
+  // Clicking brings the app forward and switches to the account that got mail.
+  note.on('click', () => {
+    showWindow();
+    setActive(acc.id);
+  });
+  note.show();
+}
+
+// ---------------------------------------------------------------------------
 // Signed-in identity detection
 // Best-effort: Outlook exposes the signed-in mailbox in the page title and a
 // few DOM hooks; Gmail puts the active account email in the title and an
@@ -439,6 +478,9 @@ function createAccountView(account) {
       contextIsolation: !isGoogle,
       nodeIntegration: false,
       spellcheck: true,
+      // Keep hidden accounts polling so they detect new mail (and update their
+      // title-based unread count) promptly even while another account is shown.
+      backgroundThrottling: false,
       ...(isGoogle ? { preload: GOOGLE_PRELOAD } : {}),
     },
   });
@@ -477,7 +519,11 @@ function createAccountView(account) {
   wc.on('page-title-updated', (_e, title) => {
     const entry = views.get(account.id);
     if (!entry) return;
-    entry.unread = parseUnread(title);
+    const prev = entry.unread || 0;
+    const next = parseUnread(title);
+    entry.unread = next;
+    maybeNotifyNewMail(entry, prev, next);
+    entry.sawTitle = true;
     refreshBadges();
   });
 
