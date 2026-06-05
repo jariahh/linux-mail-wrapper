@@ -71,11 +71,12 @@ const SEC_CH_UA =
 const SEC_CH_UA_FULL =
   `"Chromium";v="${CHROME_FULL}", "Google Chrome";v="${CHROME_FULL}", "Not?A_Brand";v="99.0.0.0"`;
 
-// The header rewrite (configureSession) fixes what Google sees over HTTP. The
-// in-page JS tells (navigator.userAgentData advertising only "Chromium", and an
-// empty window.chrome) are patched in the page's main world by
-// src/google-preload.js, loaded only on Google account views.
-const GOOGLE_PRELOAD = path.join(__dirname, 'google-preload.js');
+// Every account view loads src/account-preload.js in its main world
+// (contextIsolation:false). It captures the unread count via the Badging API
+// and — for Google accounts (flagged with --lmw-google) — applies the
+// real-Chrome fingerprint that gets past Google's "browser may not be secure"
+// gate (the header side of that is in configureSession).
+const ACCOUNT_PRELOAD = path.join(__dirname, 'account-preload.js');
 
 // Hosts that must open *inside* the app (auth / SSO popups). Anything else that
 // tries to open a new window is treated as an external link and handed to the
@@ -241,7 +242,7 @@ let accounts = [];         // persisted source of truth (see loadAccounts)
 // ---------------------------------------------------------------------------
 // Per-account session configuration
 // ---------------------------------------------------------------------------
-// The wrapper fires new-mail notifications itself (see maybeNotifyNewMail), so
+// The wrapper fires new-mail notifications itself (see setUnread/notifyNewMail), so
 // the web 'notifications' permission is intentionally NOT granted — otherwise
 // Outlook/Gmail would also raise their own, producing duplicates with worse
 // click handling. We still allow the small set of conveniences webmail uses.
@@ -359,31 +360,25 @@ function refreshBadges() {
 }
 
 // ---------------------------------------------------------------------------
-// New-mail notifications
-// We derive "new mail" from the unread count rising (parsed from the title).
-// Fire only when the user isn't already looking at that account — i.e. it's a
-// background account, or the window is hidden/unfocused. This keeps the active
-// account's own folder navigation (which also moves the title count) quiet.
+// Unread count + new-mail notifications
+// Unread comes from two sources, funnelled through setUnread():
+//   - the Badging API (navigator.setAppBadge) the web app calls — authoritative,
+//     and the only signal Outlook gives us (its title has no "(N)"); once an
+//     account reports a badge we trust it and ignore the title.
+//   - the page title "(N)" — the fallback (Gmail and anything that puts it there).
+// A notification fires when the count rises, unless the user is already looking
+// at that account (so the active account's own folder navigation stays quiet).
 // ---------------------------------------------------------------------------
 function userIsWatching(id) {
   return id === activeId && win && win.isVisible() && win.isFocused();
 }
 
-function maybeNotifyNewMail(entry, prev, next) {
-  // Skip the first title we ever see (initial load establishes the baseline),
-  // anything that isn't an increase, and the account the user is watching.
-  if (!entry.sawTitle || next <= prev || userIsWatching(entry.account.id)) return;
-  // Debounce: providers often flicker the title a few times per delivery.
-  const now = Date.now();
-  if (entry.lastNotify && now - entry.lastNotify < 5000) return;
-  entry.lastNotify = now;
-
+function notifyNewMail(entry, count) {
   if (!Notification.isSupported()) return;
   const acc = entry.account;
-  const name = acc.displayName || acc.name;
   const note = new Notification({
-    title: name,
-    body: next === 1 ? 'New message' : `${next} unread messages`,
+    title: acc.displayName || acc.name,
+    body: count === 1 ? 'New message' : `${count} unread messages`,
     icon: ICON_PATH,
     silent: false,
   });
@@ -393,6 +388,24 @@ function maybeNotifyNewMail(entry, prev, next) {
     setActive(acc.id);
   });
   note.show();
+}
+
+function setUnread(entry, next) {
+  if (typeof next !== 'number' || next < 0 || !Number.isFinite(next)) return;
+  const prev = entry.unread || 0;
+  // Notify on a genuine increase — but not for the first count we ever see
+  // (that's the baseline on load) nor the account the user is actively viewing.
+  if (entry.sawCount && next > prev && !userIsWatching(entry.account.id)) {
+    const now = Date.now();
+    if (!entry.lastNotify || now - entry.lastNotify >= 5000) { // debounce flicker
+      entry.lastNotify = now;
+      notifyNewMail(entry, next);
+    }
+  }
+  entry.sawCount = true;
+  if (next === prev) return;
+  entry.unread = next;
+  refreshBadges();
 }
 
 // ---------------------------------------------------------------------------
@@ -471,16 +484,18 @@ function createAccountView(account) {
   const view = new WebContentsView({
     webPreferences: {
       partition,
-      // Google views run a main-world preload (contextIsolation off) so it can
-      // patch navigator.userAgentData / window.chrome before Google's scripts.
-      // nodeIntegration stays false, so the page still gets no Node access.
-      contextIsolation: !isGoogle,
+      // All account views run account-preload.js in the main world
+      // (contextIsolation off) so it can read the Badging API unread count and,
+      // for Google, patch navigator.userAgentData / window.chrome before the
+      // page's scripts. nodeIntegration stays false — the page gets no Node.
+      contextIsolation: false,
       nodeIntegration: false,
       spellcheck: true,
+      preload: ACCOUNT_PRELOAD,
+      additionalArguments: isGoogle ? ['--lmw-google'] : [],
       // Keep hidden accounts polling so they detect new mail (and update their
-      // title-based unread count) promptly even while another account is shown.
+      // unread count) promptly even while another account is shown.
       backgroundThrottling: false,
-      ...(isGoogle ? { preload: GOOGLE_PRELOAD } : {}),
     },
   });
 
@@ -498,8 +513,9 @@ function createAccountView(account) {
           autoHideMenuBar: true,
           webPreferences: {
             partition,
-            contextIsolation: !isGoogle,
-            ...(isGoogle ? { preload: GOOGLE_PRELOAD } : {}),
+            contextIsolation: false,
+            preload: ACCOUNT_PRELOAD,
+            additionalArguments: isGoogle ? ['--lmw-google'] : [],
           },
         },
       };
@@ -515,15 +531,12 @@ function createAccountView(account) {
     try { child.webContents.setUserAgent(uaForUrl(url)); } catch (_) { /* noop */ }
   });
 
+  // Title-based unread is the fallback: only trust it until the web app reports
+  // its own count via the Badging API (entry.badgeSeen), which is authoritative.
   wc.on('page-title-updated', (_e, title) => {
     const entry = views.get(account.id);
-    if (!entry) return;
-    const prev = entry.unread || 0;
-    const next = parseUnread(title);
-    entry.unread = next;
-    maybeNotifyNewMail(entry, prev, next);
-    entry.sawTitle = true;
-    refreshBadges();
+    if (!entry || entry.badgeSeen) return;
+    setUnread(entry, parseUnread(title));
   });
 
   const entry = { account, view, unread: 0, timer: null };
@@ -695,6 +708,17 @@ function createWindow() {
   layout();
   win.on('resize', layout);
 }
+
+// Unread count pushed by an account view's preload (Badging API interception).
+ipcMain.on('account:badge', (e, count) => {
+  for (const entry of views.values()) {
+    if (!entry.view.webContents.isDestroyed() && entry.view.webContents === e.sender) {
+      entry.badgeSeen = true; // authoritative from here on; stop trusting the title
+      setUnread(entry, typeof count === 'number' ? count : 0);
+      return;
+    }
+  }
+});
 
 // IPC from the chrome views (top bar + sidebar)
 ipcMain.on('select-account', (_e, id) => setActive(id));

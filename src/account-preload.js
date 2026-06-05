@@ -1,22 +1,42 @@
 'use strict';
 
-// Main-world preload for Google account views ONLY (loaded with
-// contextIsolation:false so these patches land in the page's own world, before
-// any Google script runs). Google's "this browser or app may not be secure"
-// sign-in gate rejects embedded browsers that betray themselves via:
-//   1. navigator.userAgentData advertising only "Chromium" (never "Google
-//      Chrome"), at the real engine version, and
-//   2. an empty window.chrome object (real Chrome exposes app/runtime/
-//      loadTimes/csi).
-// The HTTP-header rewrite in main.js fixes what Google sees over the wire; this
-// fixes what its in-page JS sees. nodeIntegration stays false, so the remote
-// page still gets no Node access — `require`/`process` remain preload-local.
+// Main-world preload for EVERY account view (loaded with contextIsolation:false
+// so it can see and patch the page's own globals). nodeIntegration stays false,
+// so the remote page still gets no Node access — require/ipcRenderer remain
+// preload-local. Two jobs:
+//
+//   1) Unread count via the Badging API. Outlook/Gmail call
+//      navigator.setAppBadge(n) with their unread count; we capture it and
+//      forward it to the main process. This is authoritative and works even for
+//      providers (Outlook) whose page title doesn't carry a "(N)" count.
+//   2) For Google accounts (flagged via additionalArguments), the real-Chrome
+//      fingerprint that gets past Google's "browser may not be secure" gate.
+const { ipcRenderer } = require('electron');
+
+// --- (1) unread via the Badging API ----------------------------------------
 (() => {
+  const report = (count) => {
+    try { ipcRenderer.send('account:badge', count); } catch (_) { /* noop */ }
+  };
+  try {
+    // Defining these guarantees the API is present, so the web app feature-
+    // detects it and calls it. We don't forward to any native badge — the
+    // wrapper does its own per-account accounting in the main process.
+    navigator.setAppBadge = (count) => {
+      if (typeof count === 'number' && isFinite(count)) report(count);
+      // A badge with no number (a "dot") leaves the numeric count unchanged.
+      return Promise.resolve();
+    };
+    navigator.clearAppBadge = () => { report(0); return Promise.resolve(); };
+  } catch (_) { /* never break the page */ }
+})();
+
+// --- (2) Google real-Chrome fingerprint ------------------------------------
+if (process.argv.includes('--lmw-google')) {
   try {
     const full = process.versions.chrome;          // e.g. "130.0.6723.191"
     const major = full.split('.')[0];              // e.g. "130"
 
-    // (1) navigator.userAgentData -> present as real Google Chrome.
     const brands = [
       { brand: 'Chromium', version: major },
       { brand: 'Google Chrome', version: major },
@@ -41,7 +61,6 @@
       get: () => uaData, configurable: true,
     });
 
-    // (2) window.chrome -> flesh out the bits real Chrome exposes.
     const t = Date.now() / 1000;
     const chrome = window.chrome || {};
     chrome.app = chrome.app || {
@@ -68,4 +87,4 @@
     };
     window.chrome = chrome;
   } catch (e) { /* never break the page */ }
-})();
+}

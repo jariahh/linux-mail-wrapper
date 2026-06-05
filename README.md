@@ -72,9 +72,13 @@ automatically per account based on its URL.
   one notification per delivery with consistent click behaviour. It stays quiet
   for the account you're actively looking at (the window is focused and that
   account is on top).
+- **Unread counts for every provider** — the count comes from the web app's own
+  badge (the `navigator.setAppBadge` Badging API it calls with its unread total),
+  which works for Outlook as well as Gmail. It falls back to the page-title
+  `(N)` count if a provider doesn't use the Badging API. Shown as per-account
+  rail badges plus an app/taskbar badge of the combined total.
 - **Auth-aware link handling** — Microsoft/Google SSO popups stay in-app; real
   external links open in your default browser.
-- **Unread badges** per account + an app badge count (parsed from the page title).
 
 ## Add an account
 
