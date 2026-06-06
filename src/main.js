@@ -71,10 +71,11 @@ const SEC_CH_UA =
 const SEC_CH_UA_FULL =
   `"Chromium";v="${CHROME_FULL}", "Google Chrome";v="${CHROME_FULL}", "Not?A_Brand";v="99.0.0.0"`;
 
-// Google account views load src/account-preload.js in their main world
-// (contextIsolation:false) to apply the real-Chrome fingerprint that gets past
-// Google's "browser may not be secure" gate (the header side is in
-// configureSession). Other providers don't need it.
+// Every account view loads src/account-preload.js in its main world
+// (contextIsolation:false): it neutralizes the page's Badging API calls so they
+// don't fight the wrapper's combined app-badge total, and — for Google views
+// (flagged --lmw-google) — applies the real-Chrome fingerprint that gets past
+// Google's "browser may not be secure" gate (header side is in configureSession).
 const ACCOUNT_PRELOAD = path.join(__dirname, 'account-preload.js');
 
 // Scrapes the current unread count from an account page, run periodically by the
@@ -513,13 +514,15 @@ function createAccountView(account) {
   const view = new WebContentsView({
     webPreferences: {
       partition,
-      // Google views run the main-world preload (contextIsolation off) so it can
-      // patch navigator.userAgentData / window.chrome before the page's scripts.
-      // Other providers keep contextIsolation on. nodeIntegration is always off.
-      contextIsolation: !isGoogle,
+      // Every view runs the main-world preload (contextIsolation off) to
+      // neutralize the page's Badging API calls (so they don't fight our
+      // combined app-badge total) and, for Google, apply the sign-in
+      // fingerprint. nodeIntegration stays false — the page gets no Node access.
+      contextIsolation: false,
       nodeIntegration: false,
       spellcheck: true,
-      ...(isGoogle ? { preload: ACCOUNT_PRELOAD } : {}),
+      preload: ACCOUNT_PRELOAD,
+      additionalArguments: isGoogle ? ['--lmw-google'] : [],
       // All account views stay rendered (see layout()), so keep them unthrottled
       // when not on top — they need to keep detecting mail / updating unread.
       backgroundThrottling: false,
@@ -540,8 +543,9 @@ function createAccountView(account) {
           autoHideMenuBar: true,
           webPreferences: {
             partition,
-            contextIsolation: !isGoogle,
-            ...(isGoogle ? { preload: ACCOUNT_PRELOAD } : {}),
+            contextIsolation: false,
+            preload: ACCOUNT_PRELOAD,
+            additionalArguments: isGoogle ? ['--lmw-google'] : [],
           },
         },
       };

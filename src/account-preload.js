@@ -1,20 +1,29 @@
 'use strict';
 
-// Main-world preload for GOOGLE account views only (loaded with
-// contextIsolation:false so these patches land in the page's own world before
-// any Google script runs; nodeIntegration stays false, so the page gets no Node
-// access). Google's "this browser or app may not be secure" sign-in gate rejects
-// embedded browsers that betray themselves via:
-//   1. navigator.userAgentData advertising only "Chromium" (never "Google
-//      Chrome"), at the real engine version, and
-//   2. an empty window.chrome object (real Chrome exposes app/runtime/
-//      loadTimes/csi).
-// The HTTP-header rewrite in main.js fixes what Google sees over the wire; this
-// fixes what its in-page JS sees.
+// Main-world preload for EVERY account view (contextIsolation:false so these
+// patches land in the page's own world; nodeIntegration stays false, so the page
+// gets no Node access).
 //
-// (Unread counts are NOT handled here — they're scraped from the page DOM by the
-// main process; see UNREAD_JS in main.js.)
+// (1) Neutralize the Badging API for all providers. The web apps call
+//     navigator.setAppBadge() with THEIR OWN unread count, which Electron routes
+//     to the single app-level badge — so each account clobbers the others and
+//     the taskbar shows just one account's count. We swallow these calls so the
+//     wrapper's own combined total (app.setBadgeCount in refreshBadges) is the
+//     only thing that drives the OS/taskbar badge. Per-account counts are
+//     scraped from the DOM instead (UNREAD_JS in main.js).
 (() => {
+  try {
+    navigator.setAppBadge = () => Promise.resolve();
+    navigator.clearAppBadge = () => Promise.resolve();
+  } catch (_) { /* never break the page */ }
+})();
+
+// (2) Google fingerprint (flagged with --lmw-google) for the "browser may not be
+// secure" sign-in gate. Google rejects embedded browsers that betray themselves
+// via navigator.userAgentData advertising only "Chromium" (never "Google
+// Chrome") and an empty window.chrome. The HTTP-header rewrite in main.js fixes
+// what Google sees over the wire; this fixes what its in-page JS sees.
+if (process.argv.includes('--lmw-google')) {
   try {
     const full = process.versions.chrome;          // e.g. "130.0.6723.191"
     const major = full.split('.')[0];              // e.g. "130"
@@ -69,4 +78,4 @@
     };
     window.chrome = chrome;
   } catch (e) { /* never break the page */ }
-})();
+}
