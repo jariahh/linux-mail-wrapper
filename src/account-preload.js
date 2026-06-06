@@ -19,6 +19,21 @@ const { ipcRenderer } = require('electron');
     try { ipcRenderer.send('account:badge', count); } catch (_) { /* noop */ }
   };
   try {
+    // Outlook on the web only uses the Badging API when it believes it's an
+    // installed app — it gates the call on `matchMedia('(display-mode:
+    // standalone)')`. In a wrapped tab that's false, so it never badges (Gmail
+    // badges regardless). Spoof the standalone display-mode query to true so
+    // Outlook reports its unread count; harmless for the other providers.
+    const realMatchMedia = window.matchMedia.bind(window);
+    window.matchMedia = (query) => {
+      const mql = realMatchMedia(query);
+      if (/display-mode\s*:\s*standalone/i.test(String(query))) {
+        try { Object.defineProperty(mql, 'matches', { get: () => true, configurable: true }); } catch (_) {}
+      }
+      return mql;
+    };
+  } catch (_) { /* never break the page */ }
+  try {
     // Defining these guarantees the API is present, so the web app feature-
     // detects it and calls it. We don't forward to any native badge — the
     // wrapper does its own per-account accounting in the main process.
