@@ -64,19 +64,20 @@ automatically per account based on its URL.
 - **System tray** — closing the window hides it to the tray (it keeps running for
   notifications); quit from the tray menu. The tray also toggles **Start on login**
   and **Start hidden in tray**.
-- **New-mail notifications** — the app watches every account's unread count
-  (even the hidden ones — background throttling is off so they keep polling) and
+- **New-mail notifications** — the app reads every account's unread count and
   fires a native desktop notification when it rises. **Clicking the notification
   brings the window forward and switches to that account.** The wrapper raises
-  these itself rather than letting each web app fire its own, so you get exactly
+  these itself (the web `notifications` permission is denied) so you get exactly
   one notification per delivery with consistent click behaviour. It stays quiet
-  for the account you're actively looking at (the window is focused and that
-  account is on top).
-- **Unread counts for every provider** — the count comes from the web app's own
-  badge (the `navigator.setAppBadge` Badging API it calls with its unread total),
-  which works for Outlook as well as Gmail. It falls back to the page-title
-  `(N)` count if a provider doesn't use the Badging API. Shown as per-account
-  rail badges plus an app/taskbar badge of the combined total.
+  for the account you're actively looking at (window focused + that account on
+  top).
+- **Unread counts for every provider** — the count is read from each account's
+  page: Outlook (OWA) exposes it on the Inbox folder (`… (N unread)`), Gmail/most
+  others in the tab title (`(N)`). To make this work for accounts you're *not*
+  currently viewing, **all account views stay loaded and rendering** (the active
+  one is simply drawn on top) — otherwise providers like Outlook go dormant when
+  hidden and would never update or notify. Shown as per-account rail badges plus
+  an app/taskbar badge of the combined total.
 - **Auth-aware link handling** — Microsoft/Google SSO popups stay in-app; real
   external links open in your default browser.
 

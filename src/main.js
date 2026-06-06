@@ -71,12 +71,34 @@ const SEC_CH_UA =
 const SEC_CH_UA_FULL =
   `"Chromium";v="${CHROME_FULL}", "Google Chrome";v="${CHROME_FULL}", "Not?A_Brand";v="99.0.0.0"`;
 
-// Every account view loads src/account-preload.js in its main world
-// (contextIsolation:false). It captures the unread count via the Badging API
-// and — for Google accounts (flagged with --lmw-google) — applies the
-// real-Chrome fingerprint that gets past Google's "browser may not be secure"
-// gate (the header side of that is in configureSession).
+// Google account views load src/account-preload.js in their main world
+// (contextIsolation:false) to apply the real-Chrome fingerprint that gets past
+// Google's "browser may not be secure" gate (the header side is in
+// configureSession). Other providers don't need it.
 const ACCOUNT_PRELOAD = path.join(__dirname, 'account-preload.js');
+
+// Scrapes the current unread count from an account page, run periodically by the
+// main process (executeJavaScript runs in the page's main world). Outlook (OWA)
+// exposes it on the Inbox folder node's aria-label/title as "(N unread)"; Gmail
+// (and others) put it in the document title as "(N)". Returns null when unknown
+// so a transient/not-yet-loaded page doesn't clobber a known count.
+const UNREAD_JS = `(() => {
+  try {
+    // Outlook: folder node "Inbox - 12,345 items (N unread)"
+    const nodes = document.querySelectorAll('[aria-label*="unread)"],[title*="unread)"]');
+    for (const el of nodes) {
+      const a = el.getAttribute('aria-label') || el.getAttribute('title') || '';
+      const m = a.match(/Inbox\\b[^()]*\\((\\d[\\d,]*)\\s*unread\\)/i);
+      if (m) return parseInt(m[1].replace(/,/g, ''), 10);
+    }
+    // Gmail / generic: title "Inbox (N) - ..."
+    const tm = (document.title || '').match(/\\((\\d+)\\)/);
+    if (tm) return parseInt(tm[1], 10);
+    // Gmail at inbox-zero shows no "(N)" — treat a loaded Gmail title as 0.
+    if (/\\bGmail\\b/.test(document.title || '')) return 0;
+    return null;
+  } catch (e) { return null; }
+})();`;
 
 // Hosts that must open *inside* the app (auth / SSO popups). Anything else that
 // tries to open a new window is treated as an external link and handed to the
@@ -297,24 +319,31 @@ function broadcast(channel, payload) {
 // ---------------------------------------------------------------------------
 // Layout — a full-width title bar across the top, a standalone sidebar down the
 // left below it, and the active account view filling the remaining area.
+//
+// Every account view is kept visible and given the same body bounds, with the
+// active one raised to the top of the z-order so it's the one you see. Why not
+// just show the active one? Because providers like Outlook (OWA) only render
+// their folder list / detect new mail / update unread while the page is
+// *visible* — a setVisible(false) view goes dormant and would never notify or
+// show a count. Stacking them keeps every account live; the others are simply
+// covered by the active one.
 // ---------------------------------------------------------------------------
 function layout() {
   if (!win) return;
   const { width, height } = win.getContentBounds();
   const bodyH = Math.max(0, height - TOPBAR_HEIGHT);
+  const bodyW = Math.max(0, width - RAIL_WIDTH);
   if (topbar) topbar.setBounds({ x: 0, y: 0, width, height: TOPBAR_HEIGHT });
   if (sidebar) sidebar.setBounds({ x: 0, y: TOPBAR_HEIGHT, width: RAIL_WIDTH, height: bodyH });
-  for (const [id, entry] of views) {
-    const active = id === activeId;
-    entry.view.setVisible(active);
-    if (active) {
-      entry.view.setBounds({
-        x: RAIL_WIDTH,
-        y: TOPBAR_HEIGHT,
-        width: Math.max(0, width - RAIL_WIDTH),
-        height: bodyH,
-      });
-    }
+  for (const entry of views.values()) {
+    entry.view.setVisible(true);
+    entry.view.setBounds({ x: RAIL_WIDTH, y: TOPBAR_HEIGHT, width: bodyW, height: bodyH });
+  }
+  // Raise the active account view above the rest (z-order follows add order).
+  const act = activeId && views.get(activeId);
+  if (act) {
+    win.contentView.removeChildView(act.view);
+    win.contentView.addChildView(act.view);
   }
 }
 
@@ -341,13 +370,8 @@ function sendAccounts() {
 }
 
 // ---------------------------------------------------------------------------
-// Unread badge handling — Outlook/Gmail both put "(N)" in the page title.
+// Unread badge handling — counts are scraped from the page (see UNREAD_JS).
 // ---------------------------------------------------------------------------
-function parseUnread(title) {
-  const m = /\((\d+)\)/.exec(title || '');
-  return m ? parseInt(m[1], 10) : 0;
-}
-
 function refreshBadges() {
   let total = 0;
   const payload = {};
@@ -361,13 +385,9 @@ function refreshBadges() {
 
 // ---------------------------------------------------------------------------
 // Unread count + new-mail notifications
-// Unread comes from two sources, funnelled through setUnread():
-//   - the Badging API (navigator.setAppBadge) the web app calls — authoritative,
-//     and the only signal Outlook gives us (its title has no "(N)"); once an
-//     account reports a badge we trust it and ignore the title.
-//   - the page title "(N)" — the fallback (Gmail and anything that puts it there).
-// A notification fires when the count rises, unless the user is already looking
-// at that account (so the active account's own folder navigation stays quiet).
+// Counts are scraped from each account page (UNREAD_JS) on a short interval and
+// funnelled through setUnread(). A notification fires when the count rises,
+// unless the user is already looking at that account.
 // ---------------------------------------------------------------------------
 function userIsWatching(id) {
   return id === activeId && win && win.isVisible() && win.isFocused();
@@ -406,6 +426,15 @@ function setUnread(entry, next) {
   if (next === prev) return;
   entry.unread = next;
   refreshBadges();
+}
+
+// Scrape the page's current unread count and feed it to setUnread().
+async function scrapeUnread(entry) {
+  const wc = entry.view.webContents;
+  if (wc.isDestroyed()) return;
+  let count;
+  try { count = await wc.executeJavaScript(UNREAD_JS, true); } catch (_) { return; }
+  if (typeof count === 'number') setUnread(entry, count);
 }
 
 // ---------------------------------------------------------------------------
@@ -484,17 +513,15 @@ function createAccountView(account) {
   const view = new WebContentsView({
     webPreferences: {
       partition,
-      // All account views run account-preload.js in the main world
-      // (contextIsolation off) so it can read the Badging API unread count and,
-      // for Google, patch navigator.userAgentData / window.chrome before the
-      // page's scripts. nodeIntegration stays false — the page gets no Node.
-      contextIsolation: false,
+      // Google views run the main-world preload (contextIsolation off) so it can
+      // patch navigator.userAgentData / window.chrome before the page's scripts.
+      // Other providers keep contextIsolation on. nodeIntegration is always off.
+      contextIsolation: !isGoogle,
       nodeIntegration: false,
       spellcheck: true,
-      preload: ACCOUNT_PRELOAD,
-      additionalArguments: isGoogle ? ['--lmw-google'] : [],
-      // Keep hidden accounts polling so they detect new mail (and update their
-      // unread count) promptly even while another account is shown.
+      ...(isGoogle ? { preload: ACCOUNT_PRELOAD } : {}),
+      // All account views stay rendered (see layout()), so keep them unthrottled
+      // when not on top — they need to keep detecting mail / updating unread.
       backgroundThrottling: false,
     },
   });
@@ -513,9 +540,8 @@ function createAccountView(account) {
           autoHideMenuBar: true,
           webPreferences: {
             partition,
-            contextIsolation: false,
-            preload: ACCOUNT_PRELOAD,
-            additionalArguments: isGoogle ? ['--lmw-google'] : [],
+            contextIsolation: !isGoogle,
+            ...(isGoogle ? { preload: ACCOUNT_PRELOAD } : {}),
           },
         },
       };
@@ -531,22 +557,16 @@ function createAccountView(account) {
     try { child.webContents.setUserAgent(uaForUrl(url)); } catch (_) { /* noop */ }
   });
 
-  // Title-based unread is the fallback: only trust it until the web app reports
-  // its own count via the Badging API (entry.badgeSeen), which is authoritative.
-  wc.on('page-title-updated', (_e, title) => {
-    const entry = views.get(account.id);
-    if (!entry || entry.badgeSeen) return;
-    setUnread(entry, parseUnread(title));
-  });
-
   const entry = { account, view, unread: 0, timer: null };
   views.set(account.id, entry);
   win.contentView.addChildView(view);
 
-  // Detect the signed-in identity once loaded, then keep watching: sign-in
-  // completes asynchronously and the user can switch account in-page.
-  wc.on('did-finish-load', () => detectIdentity(entry));
-  entry.timer = setInterval(() => detectIdentity(entry), 6000);
+  // Once loaded, detect the signed-in identity and read the unread count; then
+  // keep both refreshing — sign-in completes asynchronously, and new mail / the
+  // user reading mail changes the count over time.
+  const refresh = () => { detectIdentity(entry); scrapeUnread(entry); };
+  wc.on('did-finish-load', refresh);
+  entry.timer = setInterval(refresh, 5000);
   wc.on('destroyed', () => { if (entry.timer) clearInterval(entry.timer); });
 
   wc.loadURL(url);
@@ -708,17 +728,6 @@ function createWindow() {
   layout();
   win.on('resize', layout);
 }
-
-// Unread count pushed by an account view's preload (Badging API interception).
-ipcMain.on('account:badge', (e, count) => {
-  for (const entry of views.values()) {
-    if (!entry.view.webContents.isDestroyed() && entry.view.webContents === e.sender) {
-      entry.badgeSeen = true; // authoritative from here on; stop trusting the title
-      setUnread(entry, typeof count === 'number' ? count : 0);
-      return;
-    }
-  }
-});
 
 // IPC from the chrome views (top bar + sidebar)
 ipcMain.on('select-account', (_e, id) => setActive(id));
