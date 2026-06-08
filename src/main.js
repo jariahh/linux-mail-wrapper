@@ -723,9 +723,20 @@ function createWindow() {
   for (const account of accounts) createAccountView(account);
   if (accounts.length) setActive(accounts[0].id);
 
-  const sendMax = () => broadcast('maximized', win.isMaximized());
-  win.on('maximize', sendMax);
-  win.on('unmaximize', sendMax);
+  // Maximize/unmaximize don't reliably fire 'resize' on Linux, so relayout
+  // explicitly here too — otherwise the bars/views keep their old bounds (e.g.
+  // the toolbar buttons stranded mid-window after maximizing). The window
+  // manager may not have settled the new bounds when the event fires, so lay out
+  // immediately and again shortly after.
+  const onMaxChange = () => {
+    layout();
+    setTimeout(layout, 60);
+    broadcast('maximized', win.isMaximized());
+  };
+  win.on('maximize', onMaxChange);
+  win.on('unmaximize', onMaxChange);
+  win.on('enter-full-screen', onMaxChange);
+  win.on('leave-full-screen', onMaxChange);
 
   buildTray();
 
